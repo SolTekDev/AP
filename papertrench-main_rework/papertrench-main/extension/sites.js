@@ -1,0 +1,488 @@
+/* PaperTrench — site adapters.
+ *
+ * ELI5: Translators for each trading website. When you're on GMGN, Padre,
+ * Axiom, etc., the right adapter reads the URL (and sometimes the page) to
+ * answer "which coin are you looking at?" Each site spells chains and paths
+ * differently — adapters normalize that into one token record the rest of
+ * the extension understands.
+ *
+ * Each adapter knows how to figure out WHICH token the user is currently
+ * looking at on a given trading site. Almost all of these are SPAs that put
+ * either a token mint or an LP/pair address in the URL, so adapters parse the
+ * URL first and fall back to scanning for a Solana base58 address as a last
+ * resort. The price layer resolves both mints and pair addresses through the
+ * free Dexscreener API.
+ */
+(() => {
+  'use strict';
+
+  const BASE58_RE = /[1-9A-HJ-NP-Za-km-z]{32,44}/g;
+  const WSOL_MINT = 'So11111111111111111111111111111111111111112';
+  const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+  const USDT_MINT = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
+  const QUOTE_MINTS = new Set([WSOL_MINT, USDC_MINT, USDT_MINT]);
+
+  /* ---------------- multichain vocabulary ----------------
+   *
+   * ELI5: Each site calls chains different names — we map them to one dictionary.
+   * Each terminal spells chains its own way. Adapters translate their site's
+   * slug into the CANONICAL name (Dexscreener's chainId vocabulary, which
+   * quote.js prices against) so nothing downstream has to know which site a
+   * token came from. Every mapping below was verified against the live site
+   * on the date noted; an unlisted slug fails closed, because a chain we
+   * cannot name is a chain we cannot honestly price.
+   */
+  const SOLANA_ADDRESS_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+  const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
+
+  /* ---------------- the multichain gate ----------------
+   *
+   * ELI5: Foreign chains are built but gated off until per-chain wallets ship.
+   * MAINTAINER DECISION, 2026-08-06: v3.0.0 ships with foreign-chain
+   * DETECTION OFF. This is not an oversight and not a bug — read this before
+   * flipping it.
+   *
+   * Multichain is fully built and live-probed (docs/MULTICHAIN.md), but it
+   * has never shipped: it is in main and absent from the v2.11.0 zip, so no
+   * user has ever created a foreign-chain fill. It was built on design A — a
+   * single SOL-denominated book that converts non-Solana fills from USD at a
+   * recorded rate — and Terp has since chosen design B: PER-CHAIN NATIVE
+   * BALANCES (SOL on Solana, ETH on Base/Ethereum, BNB on BSC). Shipping A
+   * now would write user records under a model we have already decided to
+   * replace, so the feature waits one release and lands once, correctly.
+   *
+   * What stays ON while the gate is closed, deliberately:
+   *   - Every route SHAPE is still parsed. A foreign page is refused because
+   *     we recognise its chain and decline it, never because an address
+   *     accidentally failed base58. That is strictly safer than the pre-
+   *     multichain behaviour and it keeps O-11 explicit.
+   *   - The whole pricing path (quote.js chain handling, resolver chain
+   *     filtering, multichain.test.js) is untouched and still tested. Design
+   *     B reuses it verbatim; only the wallet model changes.
+   *
+   * To re-enable: land per-chain native balances first, then flip this and
+   * invert the refusal tests in test/chainrouting.test.js and
+   * test/sitegating.test.js. The route corpus in docs/MULTICHAIN.md remains
+   * valid live-probed research — design B needs it as-is.
+   */
+  const MULTICHAIN_ENABLED = false;
+
+  /** A chain we are not currently trading is refused at DETECTION, so the
+   *  panel never mounts somewhere it cannot honestly keep a book. */
+  function chainTradable(chain) {
+    return chain === 'solana' || MULTICHAIN_ENABLED;
+  }
+
+  // GMGN (live-verified 2026-08-06: all four token pages rendered).
+  const GMGN_CHAIN_BY_SLUG = { sol: 'solana', eth: 'ethereum', bsc: 'bsc', base: 'base' };
+  const GMGN_SLUG_BY_CHAIN = { solana: 'sol', ethereum: 'eth', bsc: 'bsc', base: 'base' };
+
+  // fomo (docs/MULTICHAIN.md corpus). Its detect() keeps its own slug as the
+  // chain string for continuity with the landed contract, so the reverse map
+  // is what a chip needs to build a fomo URL for a foreign-chain position.
+  const FOMO_SLUG_BY_CHAIN = {
+    solana: 'solana', bsc: 'bnb', bnb: 'bnb', ethereum: 'ethereum',
+    robinhood: 'robinhood', base: 'base', monad: 'monad', hyperliquid: 'hyperliquid',
+  };
+
+  // Birdeye (live-verified 2026-08-06): the site MOVED to /<chain>/token/<addr>
+  // and 308-redirects the old ?chain= form onto it. Its slugs are already the
+  // canonical names, so the map is an identity — but an explicit one, so an
+  // unrecognised slug still fails closed.
+  const BIRDEYE_CHAIN_BY_SLUG = {
+    solana: 'solana', ethereum: 'ethereum', bsc: 'bsc', base: 'base',
+    arbitrum: 'arbitrum', avalanche: 'avalanche', optimism: 'optimism', polygon: 'polygon',
+  };
+
+  // DexScreener (slugs harvested from its own chain nav, 2026-08-06). These
+  // ARE the canonical chainIds — DexScreener is where the price layer looks
+  // them up — so the adapter accepts exactly the ones we can price.
+  const DEXSCREENER_CHAINS = [
+    'solana', 'ethereum', 'bsc', 'base', 'arbitrum', 'avalanche', 'optimism',
+    'polygon', 'sui', 'ton', 'tron', 'hyperliquid', 'monad', 'robinhood',
+    'unichain', 'sonic', 'cronos', 'pulsechain', 'abstract', 'hyperevm',
+  ];
+  const DEXSCREENER_CHAIN_BY_SLUG = {};
+  for (const c of DEXSCREENER_CHAINS) DEXSCREENER_CHAIN_BY_SLUG[c] = c;
+
+  // Axiom (live-verified 2026-08-07 from a LOGGED-IN capture via pt-recon). A
+  // token page is axiom.trade/meme/<address>?chain=<slug> — the chain lives in
+  // the QUERY, not the path, so an adapter that ignored ?chain= read every page
+  // as Solana. The slugs come straight off the captured URL's chain/pulseChains/
+  // trackerChains params: sol, bnb, eth, robinhood. Mapped to Dexscreener's
+  // canonical chainIds; an unlisted slug fails closed. robinhood is Axiom's
+  // tokenized-equities integration — it is in the Dexscreener vocabulary (so it
+  // is NAMED here rather than silently dropped), but whether it is honestly
+  // priceable is a design-B question that only matters once the gate opens.
+  const AXIOM_CHAIN_BY_SLUG = { sol: 'solana', bnb: 'bsc', eth: 'ethereum', robinhood: 'robinhood' };
+
+  /**
+   * Validate an address against the shape its OWN chain uses, and return the
+   * detection record. This is how O-11 survives multichain: instead of one
+   * global "must be base58" rule, each chain refuses the other family's
+   * shape — so a hex address that happens to pass base58 can never be
+   * mistaken for a Solana mint, it simply routes to its own chain.
+   */
+  function tokenForSlug(slugMap, slug, address, kind) {
+    const chain = slugMap[slug];
+    if (!chain) return null;
+    const shapeOk = chain === 'solana'
+      ? SOLANA_ADDRESS_RE.test(address)
+      : EVM_ADDRESS_RE.test(address);
+    if (!shapeOk) return null;
+    // Shape is validated BEFORE the gate on purpose: while the gate is closed
+    // this is a deliberate, chain-named refusal rather than a lucky parse
+    // failure, and when it opens nothing about the shape rules changes.
+    if (!chainTradable(chain)) return null;
+    return { kind: kind || 'mint', address, chain };
+  }
+
+  function firstBase58(text) {
+    if (!text) return null;
+    BASE58_RE.lastIndex = 0;
+    const m = BASE58_RE.exec(text);
+    return m ? m[0] : null;
+  }
+
+  function queryParam(name) {
+    try {
+      return new URLSearchParams(location.search).get(name);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // pathTail: returns last non-empty path segment that matches base58
+  function pathTail() {
+    const parts = location.pathname.split('/').filter(Boolean);
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const cand = firstBase58(parts[i]);
+      if (cand) return cand;
+    }
+    return null;
+  }
+
+  const ADAPTERS = [
+    {
+      id: 'axiom',
+      name: 'Axiom',
+      // Axiom routes by pair address; fall back to its token search by mint.
+      tokenUrl: (mint, pairAddress) => (pairAddress
+        ? 'https://axiom.trade/meme/' + pairAddress
+        : 'https://axiom.trade/t/' + mint),
+      match: (h) => /(^|\.)axiom\.trade$/.test(h),
+      // axiom.trade/meme/<address>?chain=<slug> (a pair page) and
+      // axiom.trade/t/<address>?chain=<slug> (a mint). The chain lives in the
+      // QUERY — verified live logged-in 2026-08-07 (pt-recon): the captured URL
+      // was /meme/<addr>?chain=sol&pulseChains=sol,robinhood,bnb&trackerChains=
+      // sol,robinhood,bnb,eth. No ?chain= means Solana, so old links still work.
+      //
+      // No bare path-tail fallback: Axiom's wallet-tracker and profile routes
+      // also end in base58 addresses, and treating those as tokens pinned the
+      // panel open on non-trading pages forever (DEFECTS O-10/O-11). The /t/
+      // route carries a MINT and used to be mislabeled as a pair (O-13); those
+      // kinds are UNCHANGED here — the capture confirmed the routes, not a new
+      // pair/mint split, so this pass adds chain-awareness and nothing else.
+      //
+      // O-11 survives multichain the same way it does on GMGN/fomo: the slug
+      // picks the shape (sol=base58, bnb/eth/robinhood=0x40-hex) and refuses the
+      // other family, and a foreign chain is DECLINED by chainTradable() while
+      // the multichain gate is shut — recognised and refused, never misparsed.
+      detect: () => {
+        const slug = queryParam('chain') || 'sol';
+        const meme = location.pathname.match(/^\/meme\/([A-Za-z0-9]+)(?:$|[/?#])/);
+        if (meme) return tokenForSlug(AXIOM_CHAIN_BY_SLUG, slug, meme[1], 'pair');
+        const t = location.pathname.match(/^\/t\/([A-Za-z0-9]+)(?:$|[/?#])/);
+        if (t) return tokenForSlug(AXIOM_CHAIN_BY_SLUG, slug, t[1], 'mint');
+        return null;
+      },
+    },
+    {
+      id: 'padre',
+      name: 'Padre / Terminal',
+      tokenUrl: (mint) => 'https://trade.padre.gg/trade/solana/' + mint,
+      match: (h) => /(^|\.)padre\.gg$/.test(h),
+      // trade.padre.gg/trade/solana/<mint> (and legacy terminal routes).
+      // Only /trade/ and /terminal/ routes are token pages — Padre's wallet,
+      // portfolio and leaderboard routes also end in base58 addresses and
+      // must never mount the panel (DEFECTS O-10/O-11).
+      detect: () => {
+        const m = location.pathname.match(/^\/(?:trade|terminal)\/(?:[a-z0-9-]+\/)*([1-9A-HJ-NP-Za-km-z]{32,44})(?:$|[/?#])/);
+        return m ? { kind: 'mint', address: m[1] } : null;
+      },
+    },
+    {
+      id: 'photon',
+      name: 'Photon',
+      tokenUrl: (mint, pairAddress) => (pairAddress
+        ? 'https://photon-sol.tinyastro.io/en/lp/' + pairAddress
+        : 'https://photon-sol.tinyastro.io/en/r/' + mint),
+      match: (h) => /(^|\.)tinyastro\.io$/.test(h),
+      // photon-sol.tinyastro.io/en/lp/<pairAddress> and /en/r/<mint> — the
+      // second is Photon's own mint-route shape, which tokenUrl() emits when
+      // no pair is known; not detecting it meant the extension could navigate
+      // a user to a page it then refused to recognize (DEFECT O-12).
+      detect: () => {
+        const lp = location.pathname.match(/\/lp\/($|[A-Za-z0-9]+)/);
+        const lpAddr = lp && lp[1] && firstBase58(lp[1]);
+        if (lpAddr) return { kind: 'pair', address: lpAddr };
+        const r = location.pathname.match(/\/r\/($|[A-Za-z0-9]+)/);
+        const rAddr = r && r[1] && firstBase58(r[1]);
+        if (rAddr) return { kind: 'mint', address: rAddr };
+        return null;
+      },
+    },
+    {
+      id: 'gmgn',
+      name: 'GMGN',
+      // MULTICHAIN: a chip returns to the chain its position was opened on.
+      tokenUrl: (mint, pairAddress, chain) => 'https://gmgn.ai/'
+        + (GMGN_SLUG_BY_CHAIN[chain || 'solana'] || 'sol') + '/token/' + mint,
+      match: (h) => /(^|\.)gmgn\.ai$/.test(h),
+      // gmgn.ai/<chainSlug>/token/<addr>. All four slugs were rendered live
+      // on 2026-08-06 (sol/eth/bsc/base — GMGN's own copy says "Solana, BSC,
+      // Base, and Ethereum"), so EVM token pages mount instead of being
+      // refused (maintainer order, docs/MULTICHAIN.md).
+      //
+      // O-11 survives multichain as SHAPE-STRICTNESS PER SLUG rather than as
+      // a Solana-only gate: the sol slug takes base58 only, an EVM slug takes
+      // 0x40-hex only, and an unknown slug fails closed. That is strictly
+      // safer than before — an EVM address whose hex passes base58 (~13% of
+      // them) used to reach the SOLANA resolver; now it can only ever be
+      // priced on its own chain. Wallet-analysis routes (/sol/address/<w>)
+      // still never mount (O-10).
+      detect: () => {
+        const m = location.pathname.match(/^\/([a-z0-9]+)\/token\/([A-Za-z0-9]+)(?:$|[/?#])/);
+        if (!m) return null;
+        return tokenForSlug(GMGN_CHAIN_BY_SLUG, m[1], m[2]);
+      },
+    },
+    {
+      id: 'bullx',
+      name: 'BullX NEO',
+      tokenUrl: (mint, pairAddress) => 'https://neo.bullx.io/terminal?chainId=1399811149&address=' + (pairAddress || mint),
+      match: (h) => /(^|\.)bullx\.io$/.test(h),
+      // bullx.io/terminal?chainId=...&address=<pair>. The address param must
+      // be a WHOLE base58 value: an EVM 0x address can contain a 32+ char
+      // base58 run inside it (~13% of addresses) and used to be sent to the
+      // Solana resolver as a pair (DEFECT O-11). Solana's chainId is
+      // 1399811149; any other explicit chainId is not ours.
+      detect: () => {
+        const chainId = queryParam('chainId');
+        if (chainId && chainId !== '1399811149') return null;
+        const param = queryParam('address') || '';
+        if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(param)) return null;
+        return { kind: 'pair', address: param };
+      },
+    },
+    {
+      id: 'dexscreener',
+      name: 'Dexscreener',
+      tokenUrl: (mint, pairAddress, chain) => 'https://dexscreener.com/'
+        + (DEXSCREENER_CHAIN_BY_SLUG[chain] || 'solana') + '/' + (pairAddress || mint),
+      match: (h) => /(^|\.)dexscreener\.com$/.test(h),
+      // dexscreener.com/<chain>/<pairAddress> (live-verified 2026-08-06).
+      // DexScreener's slugs ARE the chainIds the price layer queries, so the
+      // adapter accepts exactly the chains we can actually price and fails
+      // closed on anything else. Requiring a whole address in the second
+      // segment is also what keeps utility routes (/gainers, /watchlist,
+      // /multicharts) from ever mounting the panel (O-10), and per-chain
+      // shape strictness replaces the old Solana-only prefix gate (O-11).
+      detect: () => {
+        const m = location.pathname.match(/^\/([a-z0-9]+)\/([A-Za-z0-9]+)(?:$|[/?#])/);
+        if (!m) return null;
+        return tokenForSlug(DEXSCREENER_CHAIN_BY_SLUG, m[1], m[2], 'pair');
+      },
+    },
+    {
+      id: 'birdeye',
+      name: 'Birdeye',
+      tokenUrl: (mint, pairAddress, chain) => 'https://birdeye.so/'
+        + (BIRDEYE_CHAIN_BY_SLUG[chain] ? chain : 'solana') + '/token/' + mint,
+      match: (h) => /(^|\.)birdeye\.so$/.test(h),
+      // birdeye.so/<chain>/token/<addr> — the LIVE scheme as of 2026-08-06.
+      //
+      // Birdeye moved off `?chain=` and now 308-redirects that form onto the
+      // path form, which had quietly turned our chain gate into DEAD CODE:
+      // the guard read a query parameter the site no longer emits, so the
+      // only thing keeping an EVM address out of the Solana resolver was hex
+      // failing base58 — which our own O-11 note puts at ~13% of addresses.
+      // The chain now comes from the path and decides the address shape, so
+      // an EVM page is either priced on its own chain or not at all.
+      //
+      // The legacy /token/<addr>?chain=<c> form is still accepted for old
+      // links and bookmarks. Profile routes never mount (O-10).
+      detect: () => {
+        const live = location.pathname.match(/^\/([a-z0-9]+)\/token\/([A-Za-z0-9]+)(?:$|[/?#])/);
+        if (live) return tokenForSlug(BIRDEYE_CHAIN_BY_SLUG, live[1], live[2]);
+        const legacy = location.pathname.match(/^\/token\/([A-Za-z0-9]+)(?:$|[/?#])/);
+        if (!legacy) return null;
+        const slug = (queryParam('chain') || 'solana').toLowerCase();
+        return tokenForSlug(BIRDEYE_CHAIN_BY_SLUG, slug, legacy[1]);
+      },
+    },
+    {
+      id: 'jupiter',
+      name: 'Jupiter',
+      tokenUrl: (mint) => 'https://jup.ag/swap?inputMint=' + WSOL_MINT + '&outputMint=' + mint,
+      match: (h) => /(^|\.)jup\.ag$/.test(h),
+      // jup.ag/swap/SOL-<mint>, jup.ag/tokens/<mint>, or the newer
+      // ?inputMint=...&outputMint=... form. After redirects the page may rewrite
+      // itself to ?buy=...&sell=... (usually SOL/USDC), so prefer the original
+      // output/input token and ignore stable/quote addresses.
+      detect: () => {
+        const pathBase58 = /^\/(?:swap|tokens|limit|dca)\//.test(location.pathname)
+          ? firstBase58(location.pathname)
+          : null; // portfolio/<wallet> and other routes are not token pages (O-10)
+        const candidates = [
+          firstBase58(queryParam('outputMint') || ''),
+          firstBase58(queryParam('inputMint') || ''),
+          firstBase58(queryParam('buy') || ''),
+          firstBase58(queryParam('sell') || ''),
+          pathBase58,
+        ].filter(Boolean);
+        const tok = candidates.find((addr) => !QUOTE_MINTS.has(addr)) || null;
+        return tok ? { kind: 'mint', address: tok } : null;
+      },
+    },
+    {
+      id: 'fomo',
+      name: 'Fomo',
+      // MULTICHAIN: fomo speaks its own slugs, so a chip for an EVM position
+      // must translate back into them — /tokens/solana/<0x…> is a dead page.
+      tokenUrl: (mint, pairAddress, chain) => 'https://fomo.family/tokens/'
+        + (FOMO_SLUG_BY_CHAIN[chain || 'solana'] || 'solana') + '/' + mint,
+      match: (h) => /(^|\.)fomo\.family$/.test(h),
+      // fomo.family/tokens/<chainSlug>/<tokenAddress>. The route shape and
+      // the live URL corpus are in docs/MULTICHAIN.md (harvested from the
+      // real site 2026-08-05: solana=base58, robinhood/bnb/ethereum=0x40hex).
+      // MULTICHAIN (maintainer order): every corpus slug mounts the panel,
+      // with per-chain address validation — the O-11 rule survives as
+      // shape-strictness per slug: a solana slug never accepts an EVM run,
+      // an EVM slug never accepts base58. Profile and user routes
+      // (/u/<handle>, /profile/<handle>) and ticker-slug /prices/ pages
+      // carry handles and tickers, not mints, and never mount (O-10).
+      detect: () => {
+        const m = location.pathname.match(/^\/tokens\/([a-z-]+)\/([A-Za-z0-9]+)(?:$|[/?#])/);
+        if (!m) return null;
+        const chain = m[1];
+        const addr = m[2];
+        if (chain === 'solana') {
+          if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr)) return null;
+          return { kind: 'mint', address: addr, chain: 'solana' };
+        }
+        const EVM_SLUGS = ['base', 'monad', 'bnb', 'ethereum', 'hyperliquid', 'robinhood'];
+        if (EVM_SLUGS.indexOf(chain) < 0) return null;
+        if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) return null;
+        // Gated off for v3.0.0 — see MULTICHAIN_ENABLED above. fomo is the
+        // chain-densest terminal (its own /token entry lands users on EVM
+        // pages routinely), so this branch is where the gate is felt most.
+        if (!chainTradable(chain)) return null;
+        return { kind: 'mint', address: addr, chain };
+      },
+    },
+    {
+      id: 'pumpfun',
+      name: 'Pump.fun',
+      tokenUrl: (mint) => 'https://pump.fun/coin/' + mint,
+      match: (h) => /(^|\.)pump\.fun$/.test(h),
+      // pump.fun/coin/<mint>, plus the legacy bare /<mint> route. Pump.fun
+      // was in the product description from day one but had NO adapter — it
+      // fell to the generic fallback (DEFECT F-24).
+      detect: () => {
+        const m = location.pathname.match(/^\/coin\/($|[A-Za-z0-9]+)/);
+        const addr = m && m[1] && firstBase58(m[1]);
+        if (addr) return { kind: 'mint', address: addr };
+        const parts = location.pathname.split('/').filter(Boolean);
+        if (parts.length === 1 && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(parts[0])) {
+          return { kind: 'mint', address: parts[0] };
+        }
+        return null;
+      },
+    },
+    {
+      id: 'lute',
+      name: 'Lute',
+      tokenUrl: (mint) => 'https://lute.gg/trade/' + mint,
+      match: (h) => /(^|\.)lute\.gg$/.test(h),
+      // lute.gg/trade/<base58Address> — Solana token page. Named routes
+      // under /trade/ (compass, momentum, portfolio, discover) and non-trade
+      // routes (/, /login, /signup) are never token pages (O-10). The
+      // {32,44} length constraint naturally rejects short named routes.
+      detect: () => {
+        const m = location.pathname.match(/^\/trade\/([1-9A-HJ-NP-Za-km-z]{32,44})(?:$|[\/?#])/);
+        return m ? { kind: 'mint', address: m[1], chain: 'solana' } : null;
+      },
+    },
+  ];
+
+  /** ELI5: Pick the adapter for this hostname, or a generic URL scraper. */
+  function currentSite() {
+    const h = location.hostname.replace(/^www\./, '');
+    for (const a of ADAPTERS) {
+      try {
+        if (a.match(h)) return a;
+      } catch (e) { /* ignore */ }
+    }
+    // Generic fallback: any page; treat last base58 in URL as a candidate mint.
+    return {
+      id: 'generic',
+      name: h || 'Unknown site',
+      match: () => true,
+      detect: () => {
+        const tail = firstBase58(location.href);
+        // Avoid matching random hashes in fragments that aren't tokens; caller
+        // verifies candidates against Dexscreener before accepting.
+        return tail ? { kind: 'mint', address: tail } : null;
+      },
+      // Unknown host: Dexscreener always resolves a Solana mint.
+      tokenUrl: (mint, pairAddress) => 'https://dexscreener.com/solana/' + (pairAddress || mint),
+    };
+  }
+
+  /**
+   * Where a positions-bar chip should navigate for a given token.
+   *
+   * Preference order: the site the position was opened on, then the site the
+   * user is currently on, then Dexscreener. Keeping the position's own site
+   * first means a chip opened on Photon returns to Photon, which is where its
+   * chart and the user's muscle memory already are.
+   */
+  function tokenUrlFor(mint, opts) {
+    if (!mint) return null;
+    const options = opts || {};
+    const wanted = options.siteId;
+    const pairAddress = options.pairAddress || null;
+    // MULTICHAIN: the position's chain rides along, because a chip that
+    // returns to the wrong chain is a link to a different token. Absent a
+    // chain the answer stays exactly what it has always been: Solana.
+    const chain = options.chain || 'solana';
+
+    let adapter = null;
+    if (wanted) adapter = ADAPTERS.find((a) => a.id === wanted) || null;
+    if (!adapter && options.fallbackSite && typeof options.fallbackSite.tokenUrl === 'function') {
+      adapter = options.fallbackSite;
+    }
+
+    if (adapter && typeof adapter.tokenUrl === 'function') {
+      try {
+        const url = adapter.tokenUrl(mint, pairAddress, chain);
+        if (url) return url;
+      } catch (e) { /* fall through to the universal link */ }
+    }
+    // The universal link must name the token's own chain too — DexScreener
+    // is multichain, and /solana/<evm address> is a page about nothing.
+    const fallbackChain = DEXSCREENER_CHAIN_BY_SLUG[chain] || 'solana';
+    return 'https://dexscreener.com/' + fallbackChain + '/' + (pairAddress || mint);
+  }
+
+  const api = {
+    ADAPTERS,           // ELI5: one translator per supported site
+    currentSite,        // ELI5: which adapter matches this page
+    firstBase58,        // ELI5: scrape a Solana address from text
+    BASE58_RE,
+    tokenUrlFor,        // ELI5: build a link when you click a position chip
+  };
+  if (typeof window !== 'undefined') window.PaperTrenchSites = api;
+  if (typeof self !== 'undefined') self.PaperTrenchSites = api;
+})();

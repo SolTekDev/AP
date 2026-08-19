@@ -1,0 +1,10 @@
+{
+  "name": "papertrench",
+  "version": "4.0.0",
+  "private": true,
+  "description": "Paper-trade memecoins on chart pages — overlay-only build.",
+  "scripts": {
+    "test": "node --test ../test"
+  },
+  "license": "MIT"
+}

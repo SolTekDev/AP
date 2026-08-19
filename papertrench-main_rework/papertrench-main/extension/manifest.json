@@ -1,0 +1,135 @@
+{
+  "manifest_version": 3,
+  "name": "PaperTrench",
+  "version": "4.0.0",
+  "description": "Paper-trade memecoins on the charts you already use — live prices, simulated fills, in-page overlay only.",
+  "permissions": [
+    "storage",
+    "tabs",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "classic"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://axiom.trade/*",
+        "https://*.axiom.trade/*",
+        "https://*.padre.gg/*",
+        "https://*.tinyastro.io/*",
+        "https://gmgn.ai/*",
+        "https://*.gmgn.ai/*",
+        "https://*.bullx.io/*",
+        "https://dexscreener.com/*",
+        "https://*.dexscreener.com/*",
+        "https://birdeye.so/*",
+        "https://*.birdeye.so/*",
+        "https://jup.ag/*",
+        "https://*.jup.ag/*",
+        "https://pump.fun/*",
+        "https://*.pump.fun/*",
+        "https://fomo.family/*",
+        "https://*.fomo.family/*",
+        "https://lute.gg/*"
+      ],
+      "js": [
+        "price-bridge.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": false
+    },
+    {
+      "matches": [
+        "https://axiom.trade/*",
+        "https://*.axiom.trade/*",
+        "https://*.padre.gg/*",
+        "https://*.tinyastro.io/*",
+        "https://gmgn.ai/*",
+        "https://*.gmgn.ai/*",
+        "https://*.bullx.io/*",
+        "https://dexscreener.com/*",
+        "https://*.dexscreener.com/*",
+        "https://birdeye.so/*",
+        "https://*.birdeye.so/*",
+        "https://jup.ag/*",
+        "https://*.jup.ag/*",
+        "https://pump.fun/*",
+        "https://*.pump.fun/*",
+        "https://fomo.family/*",
+        "https://*.fomo.family/*",
+        "https://lute.gg/*"
+      ],
+      "js": [
+        "engine.js",
+        "quote.js",
+        "sites.js",
+        "resolver.js",
+        "chart-markers.js",
+        "panel/panel-ui.js",
+        "panel/panel-drag.js",
+        "panel/panel-toast.js",
+        "panel/panel-bar.js",
+        "panel/panel-position.js",
+        "panel/panel-controls.js",
+        "panel/panel-format.js",
+        "panel/panel-chart-routing.js",
+        "panel/panel-chart-fills.js",
+        "panel/panel-overlay.js",
+        "content/content-bridge.js",
+        "content/content-storage.js",
+        "content/content-detect.js",
+        "content/content-price.js",
+        "content/content-trade.js",
+        "content/content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
+      "run_at": "document_idle",
+      "world": "ISOLATED",
+      "all_frames": false
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "PaperTrench",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "price-bridge.js",
+        "fonts/Geist-Regular.ttf"
+      ],
+      "matches": [
+        "https://axiom.trade/*",
+        "https://*.padre.gg/*",
+        "https://*.tinyastro.io/*",
+        "https://gmgn.ai/*",
+        "https://*.bullx.io/*",
+        "https://dexscreener.com/*",
+        "https://birdeye.so/*",
+        "https://jup.ag/*",
+        "https://pump.fun/*",
+        "https://fomo.family/*",
+        "https://lute.gg/*"
+      ]
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

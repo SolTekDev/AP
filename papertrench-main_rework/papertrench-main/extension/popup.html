@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <style>
+    @font-face {
+      font-family: 'Geist';
+      src: url('fonts/Geist-Regular.ttf') format('truetype');
+      font-weight: normal;
+      font-style: normal;
+      font-display: swap;
+    }
+    :root {
+      --bg: #0A0D13;
+      --raised: rgba(255, 255, 255, 0.045);
+      --line: rgba(255, 255, 255, 0.075);
+      --line-2: rgba(255, 255, 255, 0.14);
+      --text: #EAEFF7;
+      --dim: #8D97A9;
+      --faint: #5A6273;
+      --amber: #FF9D45;
+      --amber-2: #FFC081;
+      --green: #34D399;
+      --red: #FF5F56;
+      --ease: cubic-bezier(0.16, 1, 0.3, 1);
+      --mono: 'Geist', ui-monospace, "SF Mono", Menlo, monospace;
+      --weight: normal;
+    }
+    * { box-sizing: border-box; }
+    body {
+      width: 316px; margin: 0; padding: 0;
+      background: var(--bg);
+      background-image: radial-gradient(420px 220px at 50% -12%, rgba(255, 157, 69, 0.13), transparent 68%);
+      color: var(--text);
+      font-family: 'Geist', ui-sans-serif, -apple-system, "Segoe UI", sans-serif;
+      font-size: 13px;
+      font-variant-numeric: tabular-nums;
+      -webkit-font-smoothing: antialiased;
+    }
+    header {
+      display: flex; align-items: center; gap: 9px;
+      padding: 14px 16px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+    .mark {
+      width: 26px; height: 26px; border-radius: 8px;
+      display: grid; place-items: center;
+      font-size: 12px; font-weight: 900; color: #2A1400;
+      background: linear-gradient(145deg, var(--amber-2), var(--amber) 55%, #E77B22);
+      box-shadow: 0 4px 12px -3px rgba(255, 157, 69, 0.55), inset 0 1px 0 rgba(255,255,255,0.45);
+    }
+    h1 { margin: 0; font-size: 14px; font-weight: 750; letter-spacing: -0.2px; }
+    .badge {
+      margin-left: auto; padding: 3px 8px; border-radius: 999px;
+      background: rgba(255, 157, 69, 0.13); border: 1px solid rgba(255, 157, 69, 0.3);
+      color: var(--amber-2); font-size: 8.5px; font-weight: 800; letter-spacing: 1.1px;
+    }
+    .hero { padding: 15px 16px 13px; }
+    .hero .lab {
+      font-size: 9px; font-weight: 700; letter-spacing: 1.1px;
+      text-transform: uppercase; color: var(--faint);
+    }
+    .hero .equity { margin-top: 3px; font-size: 27px; font-weight: 800; letter-spacing: -0.9px; line-height: 1.1; }
+    .hero .equity small { font-size: 13px; font-weight: 700; opacity: 0.55; }
+    .hero .delta { margin-top: 3px; font-size: 12px; font-weight: 650; }
+    .grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 7px;
+      padding: 0 16px 13px;
+    }
+    .tile {
+      padding: 9px 11px; border-radius: 11px;
+      background: var(--raised); border: 1px solid var(--line);
+    }
+    .tile .k { font-size: 9px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--faint); }
+    .tile .v { margin-top: 2px; font-size: 15px; font-weight: 750; }
+    .section-label {
+      padding: 0 16px 6px;
+      font-size: 9px; font-weight: 700; letter-spacing: 1.1px;
+      text-transform: uppercase; color: var(--faint);
+    }
+    #recent { max-height: 132px; overflow-y: auto; padding: 0 16px; }
+    #recent::-webkit-scrollbar { width: 6px; }
+    #recent::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.14); border-radius: 99px; }
+    .row {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      padding: 7px 0; font-size: 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.045);
+    }
+    .row:last-child { border-bottom: none; }
+    .row.dim { color: var(--faint); justify-content: center; padding: 14px 0; }
+    .btns { display: flex; gap: 7px; padding: 12px 16px 0; }
+    button {
+      flex: 1; padding: 10px; border-radius: 9px;
+      font-family: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer;
+      transition: transform 0.13s var(--ease), filter 0.16s, background 0.16s, border-color 0.16s;
+    }
+    button:active { transform: translateY(1px) scale(0.99); }
+    #toggle {
+      background: var(--raised); border: 1px solid var(--line-2); color: var(--text);
+    }
+    #toggle:hover { background: rgba(255,255,255,0.09); border-color: rgba(255,255,255,0.22); }
+    .btn-sec {
+      display: block; width: calc(100% - 32px); margin: 7px auto 0;
+      background: transparent; border: 1px solid rgba(255, 95, 86, 0.3); color: #FFB3AE;
+    }
+    .btn-sec:hover { background: rgba(255, 95, 86, 0.12); border-color: rgba(255, 95, 86, 0.5); }
+    .btn-backup {
+      background: var(--raised); border: 1px solid var(--line-2); color: var(--text);
+    }
+    .btn-backup:hover { background: rgba(255,255,255,0.09); border-color: rgba(255,255,255,0.22); }
+    .hint {
+      margin: 12px 16px 0; padding: 9px 11px;
+      background: rgba(255,255,255,0.028); border: 1px solid var(--line); border-radius: 10px;
+      font-size: 11px; line-height: 1.5; color: var(--faint);
+    }
+    .qs { padding: 0 16px; }
+    .qs .qs-field { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+    .qs label {
+      flex: 0 0 132px; font-size: 11px; color: var(--dim); line-height: 1.3;
+    }
+    .qs input, .qs select {
+      flex: 1; min-width: 0; padding: 7px 9px; border-radius: 8px;
+      background: var(--raised); border: 1px solid var(--line-2); color: var(--text);
+      font-family: var(--mono); font-size: 12px;
+    }
+    .qs select { font-family: inherit; color-scheme: dark; }
+    .qs select option { background: #10141C; color: var(--text); }
+    .qs input:focus, .qs select:focus { outline: none; border-color: rgba(255, 157, 69, 0.55); }
+    .qs .btns { padding: 3px 0 0; }
+    #status { padding: 8px 16px 14px; font-size: 11px; color: var(--faint); min-height: 14px; }
+    .badge.badge-off {
+      background: rgba(255, 95, 86, 0.13); border-color: rgba(255, 95, 86, 0.35);
+      color: #FFB3AE;
+    }
+    .green { color: var(--green); } .red { color: var(--red); } .dim { color: var(--dim); }
+    body,
+    body * {
+      font-weight: var(--weight) !important;
+    }
+    @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="mark">P</div>
+    <h1>PaperTrench</h1>
+    <span class="badge" id="badge">PAPER</span>
+  </header>
+
+  <div class="hero">
+    <div class="lab">Paper equity</div>
+    <div class="equity" id="equity">—</div>
+    <div class="delta dim" id="delta"></div>
+  </div>
+
+  <div class="grid">
+    <div class="tile"><div class="k">Cash</div><div class="v" id="cash">—</div></div>
+    <div class="tile"><div class="k">Realized</div><div class="v" id="pnl">—</div></div>
+    <div class="tile"><div class="k">Open</div><div class="v" id="open">—</div></div>
+    <div class="tile"><div class="k">Rounds</div><div class="v" id="rounds">—</div></div>
+  </div>
+
+  <div class="section-label">Recent round trips</div>
+  <div id="recent"></div>
+
+  <div class="btns">
+    <button id="power" class="btn-backup">⏻ Turn PaperTrench off</button>
+  </div>
+  <div class="btns">
+    <button id="toggle">Toggle overlay</button>
+  </div>
+  <div class="btns">
+    <button id="backup" class="btn-backup">⬇ Backup wallet</button>
+    <button id="restore" class="btn-backup">⬆ Restore backup</button>
+  </div>
+
+  <div class="section-label" style="padding-top:14px">Quick settings</div>
+  <div class="qs">
+    <div class="qs-field"><label for="qs-balance">Starting balance (SOL)</label><input id="qs-balance" type="number" min="0.1" step="0.1"></div>
+    <div class="qs-field"><label for="qs-presets">Quick-buy presets (SOL)</label><input id="qs-presets" type="text" placeholder="0.1, 0.5, 1, 2"></div>
+    <div class="qs-field"><label for="qs-sellpcts">Quick-sell presets (%)</label><input id="qs-sellpcts" type="text" placeholder="25, 50, 75, 100"></div>
+    <div class="qs-field"><label for="qs-fees">Fees &amp; costs</label>
+      <select id="qs-fees">
+        <option value="custom">Keep current</option>
+        <option value="bot">≈ Axiom/Padre bot</option>
+        <option value="fast">≈ Aggressive sniper</option>
+        <option value="zero">No costs</option>
+      </select>
+    </div>
+    <div class="btns"><button id="qs-apply" class="btn-backup">Apply quick settings</button></div>
+  </div>
+
+  <input type="file" id="restoreFile" accept=".json,application/json" style="display:none">
+  <button id="reset" class="btn-sec">Reset wallet</button>
+
+  <div class="hint">Open a token page on Axiom, Padre, GMGN, BullX, Dexscreener, Birdeye, Jupiter, or Pump.fun to start paper trading.</div>
+  <div id="status"></div>
+  <script src="popup.js"></script>
+</body>
+</html>
